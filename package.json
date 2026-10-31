@@ -1,0 +1,19 @@
+{
+  "name": "tazajol",
+  "version": "0.1.0",
+  "description": "TazaJol - local problem reporting and tracking for Almaty Region (prototype)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node server/db/seed.js",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "leaflet": "^1.9.4",
+    "multer": "^2.4.0",
+    "pg": "^8.23.1"
+  }
+}

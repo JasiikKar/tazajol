@@ -1,0 +1,9 @@
+# Optional: PostgreSQL + PostGIS in one command (needs Docker). Not tested in the authoring environment.
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment: { POSTGRES_USER: tj, POSTGRES_PASSWORD: tj, POSTGRES_DB: tazajol }
+    ports: ["5432:5432"]
+    volumes: ["tj_data:/var/lib/postgresql/data"]
+volumes:
+  tj_data:
