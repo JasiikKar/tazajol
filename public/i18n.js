@@ -18,3 +18,6 @@ off:'Simulate no connection',queued:'Offline: report saved and will be sent late
 admin:'Admin',logout:'Log out',pw:'Admin password',hist:'History',hide:'Hide',notes:'Notifications',nonotes:'No notifications',changed:'status changed:',
 total:'Total',open:'Open',pick:'Select a report on the map or in the list',synced:'Sent from the queue',merged:'From queue: a similar report was upvoted',err:'Error',badpw:'Wrong password',region:'Outside Almaty Region',nodata:'No reports in this area'}
 };
+Object.assign(I18N.ru,{center:'Поставить метку в центре карты',all:'Все',hiddenb:'Скрыто',restore:'Вернуть',offlineNow:'Нет сети. Отчёты будут отправлены позже.',tapOrCenter:'Двигайте карту или нажмите на неё, чтобы выбрать место'});
+Object.assign(I18N.kk,{center:'Белгіні карта ортасына қою',all:'Барлығы',hiddenb:'Жасырылған',restore:'Қайтару',offlineNow:'Желі жоқ. Хабарламалар кейін жіберіледі.',tapOrCenter:'Орынды таңдау үшін картаны жылжытыңыз немесе басыңыз'});
+Object.assign(I18N.en,{center:'Pin at map center',all:'All',hiddenb:'Hidden',restore:'Restore',offlineNow:'No connection. Reports will be sent later.',tapOrCenter:'Move the map or tap it to choose the place'});

@@ -12,7 +12,7 @@ const form = (o) => { const f = new FormData(); Object.entries(o).forEach(([k, v
 const get = (p, uid = U1) => fetch(base + p, { headers: { 'X-User-Id': uid } });
 
 before(async () => {
-  ctx = createApp({ adminPassword: 'test-admin-pw', uploadDir: path.join(__dirname, 'tmp-uploads') });
+  ctx = createApp({ adminPassword: 'test-admin-pw' });
   await ctx.repo.init(fs.readFileSync(path.join(__dirname, '..', 'server', 'db', 'schema.sql'), 'utf8'));
   await seed(ctx.pool);
   await ctx.pool.query("DELETE FROM reports WHERE author_id LIKE 'test-%'");
@@ -24,7 +24,6 @@ after(async () => {
   await ctx.pool.query("DELETE FROM reports WHERE author_id LIKE 'test-%'");
   await ctx.pool.query("DELETE FROM users WHERE id LIKE 'test-%'");
   server.close(); await ctx.pool.end();
-  fs.rmSync(path.join(__dirname, 'tmp-uploads'), { recursive: true, force: true });
 });
 
 let first;
@@ -90,13 +89,37 @@ test('fixed reports no longer count as duplicates', async () => {
   assert.equal((await fix('fixed')).status, 200);
   assert.equal((await post('/reports', form({ category: 'road', lat: 43.7, lng: 77.9 }), U2)).status, 201); // now allowed
 });
-test('photo upload accepts JPEG and refuses other types', async () => {
+test('photo is stored in the database and served back; other types are refused', async () => {
+  const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 0xff, 0xd9]);
   const f = new FormData(); f.append('category', 'trash'); f.append('lat', '43.65'); f.append('lng', '77.85');
-  f.append('photo', new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }), 'a.jpg');
-  const ok = await post('/reports', f); assert.equal(ok.status, 201); assert.match((await ok.json()).photoUrl, /^\/uploads\/.+\.jpg$/);
+  f.append('photo', new Blob([jpg], { type: 'image/jpeg' }), 'a.jpg');
+  const ok = await post('/reports', f); assert.equal(ok.status, 201);
+  const rep = await ok.json(); assert.match(rep.photoUrl, /^\/api\/photos\/\d+$/);
+  const img = await fetch(base.replace('/api', '') + rep.photoUrl); // public, no user header
+  assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/jpeg');
+  assert.deepEqual(Buffer.from(await img.arrayBuffer()), jpg);
   const g = new FormData(); g.append('category', 'trash'); g.append('lat', '43.66'); g.append('lng', '77.86');
   g.append('photo', new Blob(['<script>'], { type: 'text/html' }), 'a.html');
   assert.equal((await post('/reports', g)).status, 400);
+  const h = new FormData(); h.append('category', 'trash'); h.append('lat', '43.67'); h.append('lng', '77.87'); // fake jpeg: wrong signature
+  h.append('photo', new Blob(['not an image'], { type: 'image/jpeg' }), 'b.jpg');
+  assert.equal((await post('/reports', h)).status, 400);
+  assert.equal((await fetch(base + '/photos/999999999')).status, 404);
+});
+test('hidden reports: invisible to residents, visible to admin, can be restored', async () => {
+  const r = await (await post('/reports', form({ category: 'other', lat: 43.8, lng: 77.95 }))).json();
+  const A = { 'X-User-Id': 'test-admin-0001', Authorization: 'Bearer ' + adminToken };
+  assert.equal((await fetch(`${base}/reports/${r.id}/hide`, { method: 'POST', headers: { 'X-User-Id': U1 } })).status, 403);
+  assert.equal((await fetch(`${base}/reports/${r.id}/hide`, { method: 'POST', headers: A })).status, 204);
+  assert.equal((await get(`/reports/${r.id}`)).status, 404);
+  assert.ok(!(await (await get('/reports')).json()).some((x) => x.id === r.id));
+  const adm = await (await fetch(`${base}/reports`, { headers: A })).json();
+  assert.ok(adm.some((x) => x.id === r.id && x.hidden === true));
+  assert.equal((await fetch(`${base}/reports/${r.id}/unhide`, { method: 'POST', headers: A })).status, 204);
+  assert.equal((await get(`/reports/${r.id}`)).status, 200);
+});
+test('health endpoint works without a user id', async () => {
+  const r = await fetch(base + '/health'); assert.equal(r.status, 200); assert.equal((await r.json()).status, 'ok');
 });
 test('wrong admin password is refused; requests without user id are refused', async () => {
   const r = await fetch(base + '/auth/admin-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'wrong' }) });

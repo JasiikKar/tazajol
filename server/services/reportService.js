@@ -24,10 +24,10 @@ class ReportService {
     return { report: this.withNext(await this.repo.findById(id, user.id)), existing };
   }
 
-  list(q, user) { return this.repo.list({ ...q, userId: user.id }).then((rows) => rows.map((r) => this.withNext(r))); }
+  list(q, user) { return this.repo.list({ ...q, userId: user.id, includeHidden: user.role === 'admin' }).then((rows) => rows.map((r) => this.withNext(r))); }
 
   async get(id, user) {
-    const r = await this.repo.findById(id, user.id);
+    const r = await this.repo.findById(id, user.id, user.role === 'admin');
     if (!r) throw new AppError(404, 'NOT_FOUND');
     return this.withNext(r);
   }
@@ -47,6 +47,6 @@ class ReportService {
     return this.get(id, user);
   }
 
-  async hide(id) { if (!(await this.repo.hide(id))) throw new AppError(404, 'NOT_FOUND'); }
+  async setHidden(id, hidden) { if (!(await this.repo.setHidden(id, hidden))) throw new AppError(404, 'NOT_FOUND'); }
 }
 module.exports = { ReportService };

@@ -2,25 +2,36 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>TazaJol</title>
-<meta name="theme-color" content="#0f6e56">
+<meta name="theme-color" content="#1f8a4c">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header>
-  <h1>TazaJol</h1>
-  <button id="bell" title="Notifications" aria-label="Notifications">&#128276;<span id="bellN" hidden>0</span></button>
-  <button id="adminBtn"></button>
-  <select id="lang" aria-label="Language"><option value="ru">Русский</option><option value="kk">Қазақша</option><option value="en">English</option></select>
+  <div class="brand"><img src="/icon.svg" alt="" width="30" height="30"><span>TazaJol</span></div>
+  <div class="hr">
+    <select id="lang" aria-label="Language"><option value="ru">RU</option><option value="kk">KZ</option><option value="en">EN</option></select>
+    <button id="bell" class="ic" aria-label="Notifications">&#128276;<span id="bellN" hidden>0</span></button>
+    <button id="adminBtn" class="sm"></button>
+  </div>
 </header>
 <div id="banner"></div>
-<div id="map" role="application" aria-label="Map"></div>
-<nav id="tabs"></nav>
-<main id="panel"></main>
+<div id="app">
+  <div id="mapwrap">
+    <div id="map" role="application" aria-label="Map"></div>
+    <div id="cross" hidden><svg viewBox="0 0 40 52" width="40" height="52" aria-hidden="true"><path d="M20 2C10 2 3 9.500 3 19c0 12 17 31 17 31s17-19 17-31C37 9.500 30 2 20 2z" fill="#f7c52b" stroke="#1f8a4c" stroke-width="3"/><circle cx="20" cy="19" r="6" fill="#1f8a4c"/></svg></div>
+  </div>
+  <section id="sheet">
+    <button id="handle" aria-label="Show or hide panel"><span></span></button>
+    <nav id="tabs"></nav>
+    <main id="panel"></main>
+  </section>
+</div>
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/i18n.js"></script>
 <script src="/app.js"></script>

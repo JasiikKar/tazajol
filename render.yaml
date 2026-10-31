@@ -1,0 +1,17 @@
+# Render Blueprint: one free web service. The database is a separate free Neon Postgres (PostGIS).
+services:
+  - type: web
+    name: tazajol
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL     # paste your Neon connection string
+        sync: false
+      - key: ADMIN_PASSWORD   # choose a strong password
+        sync: false
+      - key: TOKEN_SECRET
+        generateValue: true

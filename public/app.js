@@ -2,15 +2,16 @@
 'use strict';
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const COLORS = { new: '#d85a30', in_progress: '#ba7517', fixed: '#3b6d11' };
 const CATS = ['road', 'light', 'trash', 'play', 'build', 'other'];
-const S = { lang: localStorage.tj_lang || 'ru', tab: 'report', reports: [], sel: null, detail: null, dup: null, pending: null, msg: '', flash: '',
+const GLYPH = { new: '!', in_progress: '…', fixed: '✓' };
+const DEBUG = /[?&]debug/.test(location.search);
+const S = { lang: localStorage.tj_lang || 'ru', tab: 'report', reports: [], sel: null, detail: null, dup: null, pending: null, msg: '', flash: '', filter: 'all',
   token: localStorage.tj_token || '', notes: [], areas: [], offline: false, queueN: 0, draft: { cat: 'road', desc: '', photo: null, lat: null, lng: null, place: '' } };
 const T = (k) => (I18N[S.lang] && I18N[S.lang][k]) || I18N.en[k] || k;
 let uid = localStorage.tj_uid;
 if (!uid) { uid = crypto.randomUUID ? crypto.randomUUID() : 'u' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.tj_uid = uid; }
 
-/* ---------- API client (talks to the REST API) ---------- */
+/* ---------- API client ---------- */
 async function api(path, opts = {}) {
   if (S.offline) throw { network: true };
   const headers = Object.assign({ 'X-User-Id': uid }, opts.headers || {});
@@ -23,14 +24,13 @@ async function api(path, opts = {}) {
   return body;
 }
 
-/* ---------- Outbox pattern: reports saved on the phone while offline (IndexedDB) ---------- */
+/* ---------- Outbox pattern (IndexedDB): reports kept on the phone while offline ---------- */
 const idb = () => new Promise((res, rej) => { const r = indexedDB.open('tazajol', 1); r.onupgradeneeded = () => r.result.createObjectStore('outbox', { keyPath: 'ref' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 async function ob(mode, fn) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('outbox', mode); const rq = fn(tx.objectStore('outbox')); tx.oncomplete = () => res(rq && rq.result); tx.onerror = () => rej(tx.error); }); }
 const obAdd = (it) => ob('readwrite', (s) => s.put(it));
 const obAll = () => ob('readonly', (s) => s.getAll());
 const obDel = (ref) => ob('readwrite', (s) => s.delete(ref));
 async function updateQueue() { try { S.queueN = (await obAll()).length; } catch (e) { S.queueN = 0; } }
-
 function sendReport(it) {
   const f = new FormData();
   f.append('category', it.category); f.append('description', it.description || ''); f.append('lat', it.lat); f.append('lng', it.lng); f.append('ref', it.ref);
@@ -48,24 +48,29 @@ async function flush() {
       catch (e) {
         if (e.network) break;
         if (e.status === 409 && e.body && e.body.code === 'DUPLICATE') { try { await api('/reports/' + e.body.duplicate.id + '/votes', { method: 'POST' }); } catch (_) {} await obDel(it.ref); S.flash = T('merged'); }
-        else await obDel(it.ref); // invalid item: drop it
+        else await obDel(it.ref);
       }
     }
   } finally { flushing = false; await updateQueue(); loadReports(); render(); }
 }
 
-/* ---------- Map (Leaflet + OpenStreetMap tiles) ---------- */
-const map = L.map('map').setView([43.45, 77.1], 9);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+/* ---------- Map (Leaflet + OpenStreetMap) ---------- */
+const map = L.map('map', { zoomControl: false }).setView([43.45, 77.1], 9);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
 const layer = L.layerGroup().addTo(map);
 let draftMarker = null, moveTimer = null;
-map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(loadReports, 250); });
+map.on('moveend', () => { clearTimeout(moveTimer); moveTimer = setTimeout(loadReports, 300); });
 map.on('click', (e) => { if (S.tab === 'report') setDraftLoc(e.latlng.lat, e.latlng.lng); });
+if (window.ResizeObserver) new ResizeObserver(() => map.invalidateSize()).observe($('#mapwrap'));
 
+const visible = () => S.reports.filter((r) => S.filter === 'all' || r.status === S.filter);
 function drawMarkers() {
   layer.clearLayers();
-  S.reports.forEach((r) => L.circleMarker([r.lat, r.lng], { radius: r.id === S.sel ? 12 : 8, color: '#fff', weight: 2, fillColor: COLORS[r.status], fillOpacity: 0.95, bubblingMouseEvents: false })
-    .on('click', () => select(r.id)).addTo(layer));
+  visible().forEach((r) => {
+    const icon = L.divIcon({ className: '', iconSize: [30, 30], iconAnchor: [15, 15], html: `<div class="pin ${r.status}${r.id === S.sel ? ' sel' : ''}${r.hidden ? ' hid' : ''}">${GLYPH[r.status]}</div>` });
+    L.marker([r.lat, r.lng], { icon, keyboard: false, bubblingMouseEvents: false }).on('click', () => select(r.id)).addTo(layer);
+  });
 }
 async function loadReports() {
   try {
@@ -75,32 +80,32 @@ async function loadReports() {
   } catch (e) { /* offline: keep what we have */ }
 }
 async function select(id) {
-  S.sel = id; S.tab = 'list';
-  try { S.detail = await api('/reports/' + id); } catch (e) { S.detail = S.reports.find((r) => r.id === id) || null; }
+  S.sel = id; S.tab = 'list'; $('#sheet').classList.remove('min');
+  const r = S.reports.find((x) => x.id === id); if (r) map.panTo([r.lat, r.lng]);
+  try { S.detail = await api('/reports/' + id); } catch (e) { S.detail = r || null; }
   drawMarkers(); render();
 }
 function nearestArea(lat, lng) {
   let best = '', d = 1e9;
-  S.areas.forEach((a) => { const x = (a.lat - lat), y = (a.lng - lng) * Math.cos(lat * Math.PI / 180), dd = x * x + y * y; if (dd < d) { d = dd; best = a.name; } });
+  S.areas.forEach((a) => { const x = a.lat - lat, y = (a.lng - lng) * Math.cos(lat * Math.PI / 180), dd = x * x + y * y; if (dd < d) { d = dd; best = a.name; } });
   return best;
 }
-function setDraftLoc(lat, lng, keepView) {
+function setDraftLoc(lat, lng) {
   Object.assign(S.draft, { lat, lng, place: nearestArea(lat, lng) });
-  if (draftMarker) draftMarker.setLatLng([lat, lng]);
-  else draftMarker = L.marker([lat, lng], { interactive: false }).addTo(map);
+  if (draftMarker) draftMarker.setLatLng([lat, lng]); else draftMarker = L.marker([lat, lng], { interactive: false }).addTo(map);
   S.dup = null; S.msg = ''; render();
 }
 
-/* ---------- Photo: resize + re-encode in the browser (also strips EXIF/GPS metadata) ---------- */
+/* ---------- Photo: shrink + re-encode in the browser (also removes EXIF/GPS metadata) ---------- */
 async function compress(file) {
   const bmp = await createImageBitmap(file);
-  let max = 1024, q = 0.6, blob;
-  for (let i = 0; i < 4; i++) {
+  let max = 900, q = 0.6, blob;
+  for (let i = 0; i < 5; i++) {
     const k = Math.min(1, max / Math.max(bmp.width, bmp.height)), c = document.createElement('canvas');
     c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
     c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
     blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', q));
-    if (blob.size <= 250 * 1024) break; q -= 0.1; max -= 150;
+    if (blob.size <= 150 * 1024) break; q = Math.max(0.35, q - 0.08); max -= 100;
   }
   return blob;
 }
@@ -132,44 +137,47 @@ async function setStatus(id, status) {
   catch (e) { S.flash = T('err') + ': ' + ((e.body && e.body.code) || ''); if (e.status === 403) { S.token = ''; localStorage.removeItem('tj_token'); } }
   render();
 }
-async function hideReport(id) { try { await api(`/reports/${id}/hide`, { method: 'POST' }); S.sel = null; S.detail = null; await loadReports(); } catch (e) {} render(); }
+async function hideToggle(id, hide) {
+  try { await api(`/reports/${id}/${hide ? 'hide' : 'unhide'}`, { method: 'POST' }); S.detail = await api('/reports/' + id).catch(() => null); if (!S.detail) S.sel = null; await loadReports(); } catch (e) {}
+  render();
+}
 async function adminToggle() {
-  if (S.token) { S.token = ''; localStorage.removeItem('tj_token'); render(); return; }
+  if (S.token) { S.token = ''; localStorage.removeItem('tj_token'); await loadReports(); render(); return; }
   const pw = window.prompt(T('pw')); if (!pw) return;
-  try { const r = await api('/auth/admin-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) }); S.token = r.token; localStorage.tj_token = r.token; if (S.sel) S.detail = await api('/reports/' + S.sel); }
+  try { const r = await api('/auth/admin-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) }); S.token = r.token; localStorage.tj_token = r.token; await loadReports(); if (S.sel) S.detail = await api('/reports/' + S.sel).catch(() => null); }
   catch (e) { S.flash = T('badpw'); }
   render();
 }
 async function loadNotes() { try { S.notes = await api('/notifications'); } catch (e) {} render(); }
-async function openNotes() { S.tab = 'notes'; render(); try { await api('/notifications/read', { method: 'POST' }); } catch (e) {} setTimeout(loadNotes, 800); }
+async function openNotes() { S.tab = 'notes'; $('#sheet').classList.remove('min'); render(); try { await api('/notifications/read', { method: 'POST' }); } catch (e) {} setTimeout(loadNotes, 800); }
 
 /* ---------- Rendering ---------- */
-const badge = (s) => `<span class="b" style="color:var(--${s})">${esc(T(s))}</span>`;
+const badge = (s) => `<span class="b ${s}">${esc(T(s))}</span>`;
 const fmt = (d) => new Date(d).toLocaleDateString(S.lang === 'kk' ? 'kk-KZ' : S.lang === 'en' ? 'en-GB' : 'ru-RU');
 function viewDetail() {
-  const r = S.detail; if (!r) return `<div class="mu">${T('pick')}</div>`;
+  const r = S.detail; if (!r) return `<div class="mu" style="padding:6px 0">${T('pick')}</div>`;
   const admin = !!S.token;
-  return `<div class="card"><b>${esc(T(r.category))}</b> · ${esc(r.settlement || '')} ${badge(r.status)}
-  <div>${esc(r.description)}</div>${r.photoUrl ? `<img class="ph" src="${esc(r.photoUrl)}" alt="">` : ''}
+  return `<div class="card ${r.hidden ? 'hid' : ''}"><div class="row"><b>${esc(T(r.category))}</b><span class="mu">${esc(r.settlement || '')}</span>${badge(r.status)}${r.hidden ? `<span class="b hid">${T('hiddenb')}</span>` : ''}</div>
+  ${r.photoUrl ? `<img class="ph" src="${esc(r.photoUrl)}" alt="">` : ''}<div>${esc(r.description)}</div>
   <div class="mu">${r.votes} ▲ · ${fmt(r.createdAt)}</div>
-  <div class="row" style="margin-top:6px"><button data-act="vote" data-id="${r.id}" ${r.voted ? 'disabled' : ''}>${r.voted ? T('voted') : '▲ ' + T('vote')}</button>
-  ${admin ? `<select data-act="status" data-id="${r.id}"><option value="">${esc(T(r.status))}</option>${(r.allowedNext || []).map((s) => `<option value="${s}">→ ${esc(T(s))}</option>`).join('')}</select><button data-act="hide" data-id="${r.id}">${T('hide')}</button>` : ''}</div>
-  ${r.history ? `<div class="mu" style="margin-top:6px">${T('hist')}: ${r.history.map((h) => esc(T(h.to)) + ' (' + fmt(h.at) + ')').join(' → ')}</div>` : ''}</div>`;
+  <div class="row" style="margin-top:8px"><button class="y" data-act="vote" data-id="${r.id}" ${r.voted ? 'disabled' : ''}>${r.voted ? T('voted') : '▲ ' + T('vote')}</button>
+  ${admin ? `<select data-act="status" data-id="${r.id}"><option value="">${esc(T(r.status))}</option>${(r.allowedNext || []).map((s) => `<option value="${s}">→ ${esc(T(s))}</option>`).join('')}</select><button data-act="${r.hidden ? 'unhide' : 'hide'}" data-id="${r.id}">${r.hidden ? T('restore') : T('hide')}</button>` : ''}</div>
+  ${r.history ? `<div class="mu" style="margin-top:8px">${T('hist')}: ${r.history.map((h) => esc(T(h.to)) + ' (' + fmt(h.at) + ')').join(' → ')}</div>` : ''}</div>`;
 }
 function viewList() {
-  const open = S.reports.filter((r) => r.status !== 'fixed').length;
-  const rows = [...S.reports].sort((a, b) => b.votes - a.votes).map((r) => `<div class="card item" data-act="select" data-id="${r.id}"><b>${esc(T(r.category))}</b> · ${esc(r.settlement || '')} ${badge(r.status)}<div class="mu">${esc(r.description)} · ${r.votes} ▲</div></div>`).join('');
-  return viewDetail() + `<div class="mu">${T('total')}: ${S.reports.length} · ${T('open')}: ${open}</div>` + (rows || `<div class="mu">${T('nodata')}</div>`);
+  const chips = ['all', 'new', 'in_progress', 'fixed'].map((k) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-f="${k}">${T(k)}</button>`).join('');
+  const rows = [...visible()].sort((a, b) => b.votes - a.votes).map((r) => `<div class="card item ${r.hidden ? 'hid' : ''}" data-act="select" data-id="${r.id}"><div class="row"><b>${esc(T(r.category))}</b><span class="mu">${esc(r.settlement || '')}</span>${badge(r.status)}${r.hidden ? `<span class="b hid">${T('hiddenb')}</span>` : ''}</div><div class="mu">${esc(r.description)} · ${r.votes} ▲</div></div>`).join('');
+  return viewDetail() + `<div class="chips">${chips}</div>` + (rows || `<div class="mu">${T('nodata')}</div>`);
 }
 function viewReport() {
   const d = S.draft;
-  return `<div class="f"><label>${T('place')}</label><select data-bind="area"><option value="">—</option>${S.areas.map((a) => `<option ${a.name === d.place && d.lat != null ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-  <div class="mu" style="margin-top:6px">${T('tap')}${d.lat != null ? ` · ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}` : ''}</div>
-  <div class="row" style="margin-top:6px"><button data-act="gps">${T('loc')}</button></div>
+  return `<div class="f"><div class="mu" style="margin-top:4px">${T('tapOrCenter')}${d.lat != null ? ` · ${esc(d.place)}` : ''}</div>
+  <div class="row" style="margin:8px 0"><button class="p" data-act="center">${T('center')}</button><button data-act="gps">${T('loc')}</button></div>
+  <label>${T('place')}</label><select data-bind="area"><option value="">—</option>${S.areas.map((a) => `<option ${a.name === d.place && d.lat != null ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
   <label>${T('cat')}</label><select data-bind="cat">${CATS.map((c) => `<option value="${c}" ${c === d.cat ? 'selected' : ''}>${esc(T(c))}</option>`).join('')}</select>
   <label>${T('desc')}</label><textarea rows="2" maxlength="500" data-bind="desc">${esc(d.desc)}</textarea>
-  <label>${T('photo')}</label><input type="file" accept="image/*" capture="environment" data-bind="photo">${d.photo ? `<br><img class="ph" src="${d.photo.url}" alt="">` : ''}
-  ${S.dup ? `<div class="warn">${T('same')}<br><b>${esc(T(S.dup.category))}</b> · ${esc(S.dup.description)} · ${S.dup.votes} ▲<div class="row" style="margin-top:6px"><button class="p" data-act="dupyes" data-id="${S.dup.id}">${T('yes')}</button><button data-act="dupno">${T('no')}</button></div></div>` : ''}
+  <label>${T('photo')}</label><input type="file" accept="image/*" data-bind="photo">${d.photo ? `<img class="ph" src="${d.photo.url}" alt="">` : ''}
+  ${S.dup ? `<div class="warn">${T('same')}<br><b>${esc(T(S.dup.category))}</b> · ${esc(S.dup.description)} · ${S.dup.votes} ▲<div class="row" style="margin-top:8px"><button class="p" data-act="dupyes" data-id="${S.dup.id}">${T('yes')}</button><button data-act="dupno">${T('no')}</button></div></div>` : ''}
   <div class="mu" style="margin:8px 0">${esc(S.msg)}</div><button class="p" data-act="submit" style="width:100%">${T('submit')}</button></div>`;
 }
 function viewNotes() {
@@ -180,22 +188,29 @@ function render() {
   $('#adminBtn').textContent = S.token ? T('logout') : T('admin');
   const unread = S.notes.filter((n) => !n.read).length; $('#bellN').hidden = !unread; $('#bellN').textContent = unread;
   $('#tabs').innerHTML = ['report', 'list'].map((k) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${T(k)}</button>`).join('');
-  $('#banner').innerHTML = `<label style="margin:2px 0"><input type="checkbox" data-bind="offline" ${S.offline ? 'checked' : ''}> ${T('off')}</label>` +
-    (S.queueN ? `<div class="warn">${T('qn')}: ${S.queueN}</div>` : '') + (S.flash ? `<div class="mu">${esc(S.flash)}</div>` : '');
+  $('#cross').hidden = S.tab !== 'report' || $('#sheet').classList.contains('min');
+  const off = S.offline || navigator.onLine === false;
+  $('#banner').innerHTML = (off ? `<div>${T('offlineNow')}</div>` : '') + (S.queueN ? `<div>${T('qn')}: ${S.queueN}</div>` : '') + (S.flash ? `<div>${esc(S.flash)}</div>` : '') +
+    (DEBUG ? `<label style="margin:2px 0"><input type="checkbox" data-bind="offline" ${S.offline ? 'checked' : ''}> ${T('off')}</label>` : '');
+  const keepScroll = $('#panel').scrollTop;
   $('#panel').innerHTML = S.tab === 'report' ? viewReport() : S.tab === 'notes' ? viewNotes() : viewList();
+  $('#panel').scrollTop = keepScroll;
 }
 
 /* ---------- Events (delegation) ---------- */
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const id = +el.dataset.id, a = el.dataset.act;
-  if (a === 'tab') { S.tab = el.dataset.tab; S.msg = ''; S.flash = ''; render(); }
+  if (a === 'tab') { S.tab = el.dataset.tab; S.msg = ''; S.flash = ''; $('#sheet').classList.remove('min'); render(); }
   else if (a === 'submit') submit(false);
   else if (a === 'dupno') submit(true);
   else if (a === 'dupyes') vote(id, true);
   else if (a === 'vote') vote(id);
-  else if (a === 'hide') hideReport(id);
+  else if (a === 'hide') hideToggle(id, true);
+  else if (a === 'unhide') hideToggle(id, false);
   else if (a === 'select') select(id);
+  else if (a === 'filter') { S.filter = el.dataset.f; drawMarkers(); render(); }
+  else if (a === 'center') { const c = map.getCenter(); setDraftLoc(c.lat, c.lng); }
   else if (a === 'gps') navigator.geolocation && navigator.geolocation.getCurrentPosition((p) => { setDraftLoc(p.coords.latitude, p.coords.longitude); map.setView([p.coords.latitude, p.coords.longitude], 16); }, () => {});
 });
 document.addEventListener('change', async (e) => {
@@ -211,7 +226,9 @@ document.addEventListener('input', (e) => { if (e.target.dataset.bind === 'desc'
 $('#lang').addEventListener('change', (e) => { S.lang = e.target.value; localStorage.tj_lang = S.lang; render(); });
 $('#adminBtn').addEventListener('click', adminToggle);
 $('#bell').addEventListener('click', openNotes);
-window.addEventListener('online', flush);
+$('#handle').addEventListener('click', () => { $('#sheet').classList.toggle('min'); render(); setTimeout(() => map.invalidateSize(), 50); });
+window.addEventListener('online', () => { flush(); render(); });
+window.addEventListener('offline', render);
 
 /* ---------- Start ---------- */
 (async () => {

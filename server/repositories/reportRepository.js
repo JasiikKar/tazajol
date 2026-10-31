@@ -1,6 +1,6 @@
 // Repository pattern: ALL SQL lives here. Services never build queries.
 const REPORT_COLS = `r.id, r.category, r.description, r.photo_url AS "photoUrl", r.settlement, r.status,
-  r.created_at AS "createdAt", ST_Y(r.location::geometry) AS lat, ST_X(r.location::geometry) AS lng,
+  r.hidden, r.created_at AS "createdAt", ST_Y(r.location::geometry) AS lat, ST_X(r.location::geometry) AS lng,
   (SELECT count(*) FROM votes v WHERE v.report_id = r.id)::int AS votes,
   EXISTS (SELECT 1 FROM votes v WHERE v.report_id = r.id AND v.user_id = $1) AS voted`;
 
@@ -38,15 +38,15 @@ class ReportRepository {
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
 
-  async findById(id, userId) {
-    const { rows } = await this.pool.query(`SELECT ${REPORT_COLS} FROM reports r WHERE r.id = $2 AND NOT r.hidden`, [userId, id]);
+  async findById(id, userId, includeHidden = false) {
+    const { rows } = await this.pool.query(`SELECT ${REPORT_COLS} FROM reports r WHERE r.id = $2 ${includeHidden ? '' : 'AND NOT r.hidden'}`, [userId, id]);
     if (!rows[0]) return null;
     const h = await this.pool.query('SELECT old_status AS "from", new_status AS "to", created_at AS at FROM status_events WHERE report_id=$1 ORDER BY id', [id]);
     return { ...rows[0], history: h.rows };
   }
 
-  async list({ bbox, statuses, userId, limit = 500 }) {
-    const params = [userId]; const where = ['NOT r.hidden'];
+  async list({ bbox, statuses, userId, includeHidden = false, limit = 500 }) {
+    const params = [userId]; const where = includeHidden ? ['true'] : ['NOT r.hidden'];
     if (bbox) { params.push(...bbox); where.push(`r.location && ST_MakeEnvelope($${params.length - 3},$${params.length - 2},$${params.length - 1},$${params.length},4326)::geography`); }
     if (statuses && statuses.length) { params.push(statuses); where.push(`r.status = ANY($${params.length})`); }
     params.push(limit);
@@ -83,7 +83,13 @@ class ReportRepository {
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
 
-  async hide(id) { return (await this.pool.query('UPDATE reports SET hidden=true WHERE id=$1', [id])).rowCount === 1; }
+  async setHidden(id, hidden) { return (await this.pool.query('UPDATE reports SET hidden=$2 WHERE id=$1', [id, hidden])).rowCount === 1; }
+
+  // Photos live in the database (free hosting has no permanent disk)
+  async savePhoto(mime, data) { return (await this.pool.query('INSERT INTO photos(mime, data) VALUES($1,$2) RETURNING id', [mime, data])).rows[0].id; }
+  async getPhoto(id) { return (await this.pool.query('SELECT mime, data FROM photos WHERE id=$1', [id])).rows[0] || null; }
+  async deletePhoto(id) { await this.pool.query('DELETE FROM photos WHERE id=$1', [id]); }
+  async ping() { await this.pool.query('SELECT 1'); }
 
   async notifyVoters(reportId, newStatus, exceptUserId) {
     await this.pool.query(

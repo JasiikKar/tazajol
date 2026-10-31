@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS areas (
   id serial PRIMARY KEY, name text UNIQUE NOT NULL, district text,
   lat double precision NOT NULL, lng double precision NOT NULL);
 
+CREATE TABLE IF NOT EXISTS photos (
+  id serial PRIMARY KEY, mime text NOT NULL, data bytea NOT NULL, created_at timestamptz DEFAULT now());
+
 CREATE TABLE IF NOT EXISTS reports (
   id serial PRIMARY KEY,
   category text NOT NULL REFERENCES categories(key),

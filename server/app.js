@@ -23,8 +23,8 @@ function createApp(overrides = {}) {
 
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1); // behind Render's proxy: needed for correct client IPs / rate limiting
   app.use('/vendor/leaflet', express.static(path.join(__dirname, '..', 'node_modules', 'leaflet', 'dist')));
-  app.use('/uploads', express.static(cfg.uploadDir, { setHeaders: (r) => r.setHeader('X-Content-Type-Options', 'nosniff') }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use('/api', reportController({ service, repo, auth, config: cfg }));
 
